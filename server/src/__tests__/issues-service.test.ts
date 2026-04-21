@@ -1879,3 +1879,147 @@ describeEmbeddedPostgres("issueService.findMentionedProjectIds", () => {
     ]);
   });
 });
+
+describeEmbeddedPostgres("issueService.listComments cursoring", () => {
+  let db!: ReturnType<typeof createDb>;
+  let svc!: ReturnType<typeof issueService>;
+  let tempDb: Awaited<ReturnType<typeof startEmbeddedPostgresTestDatabase>> | null = null;
+
+  beforeAll(async () => {
+    tempDb = await startEmbeddedPostgresTestDatabase("paperclip-issues-comments-cursor-");
+    db = createDb(tempDb.connectionString);
+    svc = issueService(db);
+    await ensureIssueRelationsTable(db);
+  }, 20_000);
+
+  afterEach(async () => {
+    await db.delete(issueComments);
+    await db.delete(issueRelations);
+    await db.delete(issueInboxArchives);
+    await db.delete(activityLog);
+    await db.delete(issues);
+    await db.delete(executionWorkspaces);
+    await db.delete(projectWorkspaces);
+    await db.delete(projects);
+    await db.delete(agents);
+    await db.delete(instanceSettings);
+    await db.delete(companies);
+  });
+
+  afterAll(async () => {
+    await tempDb?.cleanup();
+  }, 30_000);
+
+  it("returns an empty list when the after cursor is a valid UUID that does not belong to the issue", async () => {
+    const companyId = randomUUID();
+    const issueId = randomUUID();
+    const foreignCommentId = randomUUID();
+
+    await db.insert(companies).values({
+      id: companyId,
+      name: "Paperclip",
+      issuePrefix: `T${companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`,
+      requireBoardApprovalForNewAgents: false,
+    });
+
+    await db.insert(issues).values({
+      id: issueId,
+      companyId,
+      title: "Threaded issue",
+      description: null,
+      status: "todo",
+      priority: "medium",
+    });
+
+    const otherIssueId = randomUUID();
+    await db.insert(issues).values({
+      id: otherIssueId,
+      companyId,
+      title: "Other issue",
+      description: null,
+      status: "todo",
+      priority: "medium",
+    });
+
+    await db.insert(issueComments).values({
+      id: foreignCommentId,
+      companyId,
+      issueId: otherIssueId,
+      body: "Comment on other issue",
+    });
+
+    await db.insert(issueComments).values({
+      companyId,
+      issueId,
+      body: "First",
+    });
+
+    expect(await svc.listComments(issueId, { afterCommentId: foreignCommentId, order: "asc" })).toEqual([]);
+  });
+
+  it("pages forward in ascending order after a real anchor comment", async () => {
+    const companyId = randomUUID();
+    const issueId = randomUUID();
+    const t1 = new Date("2026-04-21T10:00:00.000Z");
+    const t2 = new Date("2026-04-21T11:00:00.000Z");
+    const t3 = new Date("2026-04-21T12:00:00.000Z");
+
+    await db.insert(companies).values({
+      id: companyId,
+      name: "Paperclip",
+      issuePrefix: `T${companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`,
+      requireBoardApprovalForNewAgents: false,
+    });
+
+    await db.insert(issues).values({
+      id: issueId,
+      companyId,
+      title: "Threaded issue",
+      description: null,
+      status: "todo",
+      priority: "medium",
+    });
+
+    const [c1, c2, c3] = [randomUUID(), randomUUID(), randomUUID()];
+    await db.insert(issueComments).values([
+      { id: c1, companyId, issueId, body: "a", createdAt: t1 },
+      { id: c2, companyId, issueId, body: "b", createdAt: t2 },
+      { id: c3, companyId, issueId, body: "c", createdAt: t3 },
+    ]);
+
+    const page = await svc.listComments(issueId, { afterCommentId: c1, order: "asc" });
+    expect(page.map((c) => c.id)).toEqual([c2, c3]);
+  });
+
+  it("breaks ties on id when createdAt matches (ascending)", async () => {
+    const companyId = randomUUID();
+    const issueId = randomUUID();
+    const sameTime = new Date("2026-04-21T10:00:00.000Z");
+
+    await db.insert(companies).values({
+      id: companyId,
+      name: "Paperclip",
+      issuePrefix: `T${companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`,
+      requireBoardApprovalForNewAgents: false,
+    });
+
+    await db.insert(issues).values({
+      id: issueId,
+      companyId,
+      title: "Threaded issue",
+      description: null,
+      status: "todo",
+      priority: "medium",
+    });
+
+    const lowId = "00000000-0000-4000-8000-000000000001";
+    const highId = "ffffffff-ffff-4fff-bfff-ffffffffffff";
+    await db.insert(issueComments).values([
+      { id: lowId, companyId, issueId, body: "first", createdAt: sameTime },
+      { id: highId, companyId, issueId, body: "second", createdAt: sameTime },
+    ]);
+
+    const page = await svc.listComments(issueId, { afterCommentId: lowId, order: "asc" });
+    expect(page.map((c) => c.id)).toEqual([highId]);
+  });
+});
