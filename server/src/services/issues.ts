@@ -1,5 +1,5 @@
 import { Buffer } from "node:buffer";
-import { and, asc, desc, eq, gt, inArray, isNull, lt, ne, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, ne, or, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import {
   activityLog,
@@ -197,6 +197,13 @@ function truncateInlineSummary(value: string | null | undefined, maxChars = CHIL
 function truncateByCodePoint(value: string, maxChars: number): string {
   if (value.length <= maxChars) return value;
   return Array.from(value).slice(0, maxChars).join("");
+}
+
+/** postgres.js rejects raw `Date` objects in some bind paths; use ISO text for parameters. */
+function issueCommentCursorCreatedAtParam(value: Date | string): string {
+  if (value instanceof Date) return value.toISOString();
+  if (typeof value === "string") return value;
+  return new Date(value as never).toISOString();
 }
 
 function decodeDatabaseTextPreview(value: string | null | undefined, maxChars: number): string | null {
@@ -2423,17 +2430,20 @@ export function issueService(db: Db) {
           .then((rows) => rows[0] ?? null);
 
         if (!anchor) return [];
-        const afterAnchor =
+        // Anchor values must be plain strings for postgres.js binds (Date objects throw ERR_INVALID_ARG_TYPE).
+        const anchorCreatedAt = issueCommentCursorCreatedAtParam(anchor.createdAt);
+        const anchorId = String(anchor.id);
+        conditions.push(
           order === "asc"
-            ? or(
-                gt(issueComments.createdAt, anchor.createdAt),
-                and(eq(issueComments.createdAt, anchor.createdAt), gt(issueComments.id, anchor.id)),
-              )!
-            : or(
-                lt(issueComments.createdAt, anchor.createdAt),
-                and(eq(issueComments.createdAt, anchor.createdAt), lt(issueComments.id, anchor.id)),
-              )!;
-        conditions.push(afterAnchor);
+            ? sql<boolean>`(
+                ${issueComments.createdAt} > ${anchorCreatedAt}
+                OR (${issueComments.createdAt} = ${anchorCreatedAt} AND ${issueComments.id} > ${anchorId})
+              )`
+            : sql<boolean>`(
+                ${issueComments.createdAt} < ${anchorCreatedAt}
+                OR (${issueComments.createdAt} = ${anchorCreatedAt} AND ${issueComments.id} < ${anchorId})
+              )`,
+        );
       }
 
       const query = db
