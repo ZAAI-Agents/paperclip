@@ -244,7 +244,12 @@ if [ "$dry_run" = true ]; then
     [ -z "$pkg_dir" ] && continue
     release_info "  --- $pkg_dir ---"
     cd "$REPO_ROOT/$pkg_dir"
-    pnpm publish --dry-run --no-git-checks --tag "$DIST_TAG" 2>&1 | tail -3
+    publish_args=(publish --dry-run --no-git-checks --tag "$DIST_TAG")
+    if [ "${GITHUB_ACTIONS:-}" = "true" ]; then
+      # GitHub ↔ npm trusted publishing requires provenance so npm can mint an OIDC token.
+      publish_args+=(--provenance)
+    fi
+    pnpm "${publish_args[@]}" 2>&1 | tail -3
   done <<< "$VERSIONED_PACKAGE_INFO"
   release_info "  [dry-run] Would create git tag $tag_name on $CURRENT_SHA"
 else
@@ -253,7 +258,12 @@ else
     [ -z "$pkg_dir" ] && continue
     release_info "  Publishing $pkg_name@$pkg_version"
     cd "$REPO_ROOT/$pkg_dir"
-    pnpm publish --no-git-checks --tag "$DIST_TAG" --access public
+    publish_args=(publish --no-git-checks --tag "$DIST_TAG" --access public)
+    if [ "${GITHUB_ACTIONS:-}" = "true" ]; then
+      # GitHub ↔ npm trusted publishing requires provenance so npm can mint an OIDC token.
+      publish_args+=(--provenance)
+    fi
+    pnpm "${publish_args[@]}"
   done <<< "$VERSIONED_PACKAGE_INFO"
   release_info "  ✓ Published all packages under dist-tag $DIST_TAG"
 fi
