@@ -98,7 +98,7 @@ describeEmbeddedPostgres("heartbeat issue graph liveness escalation", () => {
 
   afterAll(async () => {
     await tempDb?.cleanup();
-  });
+  }, 30_000);
 
   async function seedBlockedChain() {
     const companyId = randomUUID();
@@ -170,8 +170,46 @@ describeEmbeddedPostgres("heartbeat issue graph liveness escalation", () => {
       type: "blocks",
     });
 
-    return { companyId, managerId, blockedIssueId, blockerIssueId };
+    return { companyId, managerId, coderId, blockedIssueId, blockerIssueId };
   }
+
+  it("does not escalate when the unassigned blocker has a queued wake scoped only via payload taskId", async () => {
+    const { companyId, coderId, blockedIssueId, blockerIssueId } = await seedBlockedChain();
+    const now = new Date("2026-04-23T12:00:00.000Z");
+    await db.insert(agentWakeupRequests).values({
+      id: randomUUID(),
+      companyId,
+      agentId: coderId,
+      source: "automation",
+      triggerDetail: "system",
+      reason: "issue_assigned",
+      payload: { taskId: blockerIssueId },
+      status: "queued",
+      requestedAt: now,
+      updatedAt: now,
+    });
+
+    const heartbeat = heartbeatService(db);
+    const result = await heartbeat.reconcileIssueGraphLiveness();
+
+    expect(result.findings).toBe(0);
+    expect(result.escalationsCreated).toBe(0);
+    expect(result.existingEscalations).toBe(0);
+
+    const escalations = await db
+      .select()
+      .from(issues)
+      .where(
+        and(eq(issues.companyId, companyId), eq(issues.originKind, "harness_liveness_escalation")),
+      );
+    expect(escalations).toHaveLength(0);
+
+    const blockers = await db
+      .select({ blockerIssueId: issueRelations.issueId })
+      .from(issueRelations)
+      .where(eq(issueRelations.relatedIssueId, blockedIssueId));
+    expect(blockers.map((row) => row.blockerIssueId)).toEqual([blockerIssueId]);
+  });
 
   it("creates one manager escalation, preserves blockers, and wakes the assignee", async () => {
     const { companyId, managerId, blockedIssueId, blockerIssueId } = await seedBlockedChain();

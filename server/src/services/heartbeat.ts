@@ -4323,6 +4323,7 @@ export function heartbeatService(db: Db) {
     const parsed = parseObject(payload);
     const nestedContext = parseObject(parsed[DEFERRED_WAKE_CONTEXT_KEY]);
     return readNonEmptyString(parsed.issueId) ??
+      readNonEmptyString(parsed.taskId) ??
       readNonEmptyString(nestedContext.issueId) ??
       readNonEmptyString(nestedContext.taskId);
   }
