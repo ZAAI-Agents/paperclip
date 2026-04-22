@@ -136,6 +136,24 @@ const MAX_INLINE_WAKE_COMMENT_BODY_TOTAL_CHARS = 12_000;
 const execFile = promisify(execFileCallback);
 const EXECUTION_PATH_HEARTBEAT_RUN_STATUSES = ["queued", "running", "scheduled_retry"] as const;
 const CANCELLABLE_HEARTBEAT_RUN_STATUSES = ["queued", "running", "scheduled_retry"] as const;
+
+/** Heartbeat run context may use `issueId`, legacy `taskId`, or both — keep execution-path SQL aligned with `issueIdFromRunContext`. */
+function sqlHeartbeatRunContextMatchesIssueId(issueId: string) {
+  return or(
+    sql`${heartbeatRuns.contextSnapshot} ->> 'issueId' = ${issueId}`,
+    sql`${heartbeatRuns.contextSnapshot} ->> 'taskId' = ${issueId}`,
+  );
+}
+
+/** Queued / deferred wakes may scope the issue on the payload or under `_paperclipWakeContext`. */
+function sqlAgentWakeupPayloadMatchesIssueId(issueId: string) {
+  return or(
+    sql`${agentWakeupRequests.payload} ->> 'issueId' = ${issueId}`,
+    sql`${agentWakeupRequests.payload} ->> 'taskId' = ${issueId}`,
+    sql`${agentWakeupRequests.payload} #>> ARRAY['_paperclipWakeContext', 'issueId'] = ${issueId}`,
+    sql`${agentWakeupRequests.payload} #>> ARRAY['_paperclipWakeContext', 'taskId'] = ${issueId}`,
+  );
+}
 const HEARTBEAT_RUN_TERMINAL_STATUSES = ["succeeded", "failed", "cancelled", "timed_out"] as const;
 const UNSUCCESSFUL_HEARTBEAT_RUN_TERMINAL_STATUSES = ["failed", "cancelled", "timed_out"] as const;
 export const BOUNDED_TRANSIENT_HEARTBEAT_RETRY_DELAYS_MS = [
@@ -3901,12 +3919,7 @@ export function heartbeatService(db: Db) {
         contextSnapshot: heartbeatRuns.contextSnapshot,
       })
       .from(heartbeatRuns)
-      .where(
-        and(
-          eq(heartbeatRuns.companyId, companyId),
-          sql`${heartbeatRuns.contextSnapshot} ->> 'issueId' = ${issueId}`,
-        ),
-      )
+      .where(and(eq(heartbeatRuns.companyId, companyId), sqlHeartbeatRunContextMatchesIssueId(issueId)))
       .orderBy(desc(heartbeatRuns.createdAt), desc(heartbeatRuns.id))
       .limit(1)
       .then((rows) => rows[0] ?? null);
@@ -3921,7 +3934,7 @@ export function heartbeatService(db: Db) {
           and(
             eq(heartbeatRuns.companyId, companyId),
             inArray(heartbeatRuns.status, [...EXECUTION_PATH_HEARTBEAT_RUN_STATUSES]),
-            sql`${heartbeatRuns.contextSnapshot} ->> 'issueId' = ${issueId}`,
+            sqlHeartbeatRunContextMatchesIssueId(issueId),
           ),
         )
         .limit(1)
@@ -3933,7 +3946,7 @@ export function heartbeatService(db: Db) {
           and(
             eq(agentWakeupRequests.companyId, companyId),
             eq(agentWakeupRequests.status, "deferred_issue_execution"),
-            sql`${agentWakeupRequests.payload} ->> 'issueId' = ${issueId}`,
+            sqlAgentWakeupPayloadMatchesIssueId(issueId),
           ),
         )
         .limit(1)
@@ -5917,7 +5930,7 @@ export function heartbeatService(db: Db) {
             and(
               eq(agentWakeupRequests.companyId, issue.companyId),
               eq(agentWakeupRequests.status, "deferred_issue_execution"),
-              sql`${agentWakeupRequests.payload} ->> 'issueId' = ${issue.id}`,
+              sqlAgentWakeupPayloadMatchesIssueId(issue.id),
             ),
           )
           .orderBy(asc(agentWakeupRequests.requestedAt))
@@ -6088,7 +6101,7 @@ export function heartbeatService(db: Db) {
           and(
             eq(heartbeatRuns.companyId, issue.companyId),
             inArray(heartbeatRuns.status, [...EXECUTION_PATH_HEARTBEAT_RUN_STATUSES]),
-            sql`${heartbeatRuns.contextSnapshot} ->> 'issueId' = ${issue.id}`,
+            sqlHeartbeatRunContextMatchesIssueId(issue.id),
             sql`${heartbeatRuns.id} <> ${run.id}`,
           ),
         )
@@ -6418,7 +6431,7 @@ export function heartbeatService(db: Db) {
               and(
                 eq(heartbeatRuns.companyId, issue.companyId),
                 inArray(heartbeatRuns.status, [...EXECUTION_PATH_HEARTBEAT_RUN_STATUSES]),
-                sql`${heartbeatRuns.contextSnapshot} ->> 'issueId' = ${issue.id}`,
+                sqlHeartbeatRunContextMatchesIssueId(issue.id),
               ),
             )
             .orderBy(
@@ -6558,7 +6571,7 @@ export function heartbeatService(db: Db) {
                 eq(agentWakeupRequests.companyId, agent.companyId),
                 eq(agentWakeupRequests.agentId, agentId),
                 eq(agentWakeupRequests.status, "deferred_issue_execution"),
-                sql`${agentWakeupRequests.payload} ->> 'issueId' = ${issue.id}`,
+                sqlAgentWakeupPayloadMatchesIssueId(issue.id),
               ),
             )
             .orderBy(asc(agentWakeupRequests.requestedAt))
