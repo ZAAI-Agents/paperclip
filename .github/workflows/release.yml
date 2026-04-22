@@ -229,6 +229,24 @@ jobs:
             echo "No NPM_TOKEN secret available; relying on trusted publishing (OIDC) if configured on npm."
           fi
 
+      - name: Preflight npm publish auth
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if npm whoami >/dev/null 2>&1; then
+            echo "npm auth OK as: $(npm whoami)"
+            exit 0
+          fi
+
+          echo "npm auth is NOT available in this job."
+          echo ""
+          echo "To unblock stable publishes, do ONE of the following:"
+          echo "  1) Configure npmjs trusted publishing (OIDC) for the @paperclipai scope + this repo/workflow, OR"
+          echo "  2) Add NPM_TOKEN to the GitHub Actions environment: npm-stable"
+          echo ""
+          echo "Without one of these, npm publish will fail with ENEEDAUTH."
+          exit 1
+
       - name: Install dependencies
         run: pnpm install --no-frozen-lockfile
 
