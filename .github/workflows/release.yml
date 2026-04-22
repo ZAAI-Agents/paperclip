@@ -218,6 +218,17 @@ jobs:
           node-version: 24
           cache: pnpm
 
+      - name: Configure npm auth (optional)
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ -n "${NPM_TOKEN}" ]; then
+            npm config set //registry.npmjs.org/:_authToken "${NPM_TOKEN}"
+            echo "Configured npm auth token from secrets."
+          else
+            echo "No NPM_TOKEN secret available; relying on trusted publishing (OIDC) if configured on npm."
+          fi
+
       - name: Install dependencies
         run: pnpm install --no-frozen-lockfile
 
@@ -232,6 +243,7 @@ jobs:
       - name: Publish stable
         env:
           GITHUB_ACTIONS: "true"
+          NPM_CONFIG_PROVENANCE: "true"
         run: |
           args=(stable --skip-verify)
           if [ -n "${{ inputs.stable_date }}" ]; then
