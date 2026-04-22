@@ -66,6 +66,12 @@ import {
   classifyIssueGraphLiveness,
   type IssueLivenessFinding,
 } from "./issue-liveness.js";
+import {
+  sqlAgentWakeupPayloadIssueIdCoalesce,
+  sqlAgentWakeupPayloadMatchesIssueId,
+  sqlHeartbeatRunContextMatchesIssueId,
+  sqlHeartbeatRunSnapshotIssueIdCoalesce,
+} from "./heartbeat-run-issue-context-sql.js";
 import { logActivity, publishPluginDomainEvent, type LogActivityInput } from "./activity-log.js";
 import {
   buildWorkspaceReadyComment,
@@ -136,24 +142,6 @@ const MAX_INLINE_WAKE_COMMENT_BODY_TOTAL_CHARS = 12_000;
 const execFile = promisify(execFileCallback);
 const EXECUTION_PATH_HEARTBEAT_RUN_STATUSES = ["queued", "running", "scheduled_retry"] as const;
 const CANCELLABLE_HEARTBEAT_RUN_STATUSES = ["queued", "running", "scheduled_retry"] as const;
-
-/** Heartbeat run context may use `issueId`, legacy `taskId`, or both — keep execution-path SQL aligned with `issueIdFromRunContext`. */
-function sqlHeartbeatRunContextMatchesIssueId(issueId: string) {
-  return or(
-    sql`${heartbeatRuns.contextSnapshot} ->> 'issueId' = ${issueId}`,
-    sql`${heartbeatRuns.contextSnapshot} ->> 'taskId' = ${issueId}`,
-  );
-}
-
-/** Queued / deferred wakes may scope the issue on the payload or under `_paperclipWakeContext`. */
-function sqlAgentWakeupPayloadMatchesIssueId(issueId: string) {
-  return or(
-    sql`${agentWakeupRequests.payload} ->> 'issueId' = ${issueId}`,
-    sql`${agentWakeupRequests.payload} ->> 'taskId' = ${issueId}`,
-    sql`${agentWakeupRequests.payload} #>> ARRAY['_paperclipWakeContext', 'issueId'] = ${issueId}`,
-    sql`${agentWakeupRequests.payload} #>> ARRAY['_paperclipWakeContext', 'taskId'] = ${issueId}`,
-  );
-}
 const HEARTBEAT_RUN_TERMINAL_STATUSES = ["succeeded", "failed", "cancelled", "timed_out"] as const;
 const UNSUCCESSFUL_HEARTBEAT_RUN_TERMINAL_STATUSES = ["failed", "cancelled", "timed_out"] as const;
 export const BOUNDED_TRANSIENT_HEARTBEAT_RETRY_DELAYS_MS = [
@@ -6809,7 +6797,7 @@ export function heartbeatService(db: Db) {
   }
 
   async function listProjectScopedRunIds(companyId: string, projectId: string) {
-    const runIssueId = sql<string | null>`${heartbeatRuns.contextSnapshot} ->> 'issueId'`;
+    const runIssueId = sqlHeartbeatRunSnapshotIssueIdCoalesce();
     const effectiveProjectId = sql<string | null>`coalesce(${heartbeatRuns.contextSnapshot} ->> 'projectId', ${issues.projectId}::text)`;
 
     const rows = await db
@@ -6834,7 +6822,7 @@ export function heartbeatService(db: Db) {
   }
 
   async function listProjectScopedWakeupIds(companyId: string, projectId: string) {
-    const wakeIssueId = sql<string | null>`${agentWakeupRequests.payload} ->> 'issueId'`;
+    const wakeIssueId = sqlAgentWakeupPayloadIssueIdCoalesce();
     const effectiveProjectId = sql<string | null>`coalesce(${agentWakeupRequests.payload} ->> 'projectId', ${issues.projectId}::text)`;
 
     const rows = await db

@@ -32,6 +32,7 @@ import { heartbeatService } from "./heartbeat.js";
 import { budgetService } from "./budgets.js";
 import { issueApprovalService } from "./issue-approvals.js";
 import { subscribeCompanyLiveEvents } from "./live-events.js";
+import { sqlHeartbeatRunSnapshotIssueIdCoalesce } from "./heartbeat-run-issue-context-sql.js";
 import { randomUUID } from "node:crypto";
 import { activityService } from "./activity.js";
 import { costService } from "./costs.js";
@@ -609,7 +610,7 @@ export function buildHostServices(
     options: { activeOnly?: boolean } = {},
   ) => {
     if (issueIds.length === 0) return [];
-    const issueIdExpr = sql<string | null>`${heartbeatRuns.contextSnapshot} ->> 'issueId'`;
+    const issueIdExpr = sqlHeartbeatRunSnapshotIssueIdCoalesce();
     const statusCondition = options.activeOnly
       ? inArray(heartbeatRuns.status, ["queued", "running"])
       : undefined;

@@ -37,6 +37,7 @@ import {
 } from "@paperclipai/shared";
 import { trackRoutineRun } from "@paperclipai/shared/telemetry";
 import { conflict, forbidden, notFound, unauthorized, unprocessable } from "../errors.js";
+import { sqlHeartbeatRunContextMatchesIssueIdColumn } from "./heartbeat-run-issue-context-sql.js";
 import { logger } from "../middleware/logger.js";
 import { getTelemetryClient } from "../telemetry.js";
 import { issueService } from "./issues.js";
@@ -574,7 +575,7 @@ export function routineService(db: Db, deps: { heartbeat?: IssueAssignmentWakeup
           and(
             eq(heartbeatRuns.companyId, issues.companyId),
             inArray(heartbeatRuns.status, LIVE_HEARTBEAT_RUN_STATUSES),
-            sql`${heartbeatRuns.contextSnapshot} ->> 'issueId' = cast(${issues.id} as text)`,
+            sqlHeartbeatRunContextMatchesIssueIdColumn(),
           ),
         )
         .where(
@@ -688,7 +689,7 @@ export function routineService(db: Db, deps: { heartbeat?: IssueAssignmentWakeup
         and(
           eq(heartbeatRuns.companyId, issues.companyId),
           inArray(heartbeatRuns.status, LIVE_HEARTBEAT_RUN_STATUSES),
-          sql`${heartbeatRuns.contextSnapshot} ->> 'issueId' = cast(${issues.id} as text)`,
+          sqlHeartbeatRunContextMatchesIssueIdColumn(),
         ),
       )
       .where(

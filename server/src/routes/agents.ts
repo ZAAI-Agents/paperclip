@@ -48,6 +48,7 @@ import {
 } from "../services/index.js";
 import { conflict, forbidden, notFound, unprocessable } from "../errors.js";
 import { assertBoard, assertCompanyAccess, assertInstanceAdmin, getActorInfo } from "./authz.js";
+import { sqlHeartbeatRunContextMatchesIssueId } from "../services/heartbeat-run-issue-context-sql.js";
 import {
   assertNoAgentHostWorkspaceCommandMutation,
   collectAgentAdapterWorkspaceCommandPaths,
@@ -2659,7 +2660,7 @@ export function agentRoutes(db: Db) {
         and(
           eq(heartbeatRuns.companyId, issue.companyId),
           inArray(heartbeatRuns.status, ["queued", "running"]),
-          sql`${heartbeatRuns.contextSnapshot} ->> 'issueId' = ${issue.id}`,
+          sqlHeartbeatRunContextMatchesIssueId(issue.id),
         ),
       )
       .orderBy(desc(heartbeatRuns.createdAt));

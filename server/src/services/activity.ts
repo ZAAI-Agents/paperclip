@@ -15,6 +15,7 @@ import {
 import { ISSUE_CONTINUATION_SUMMARY_DOCUMENT_KEY } from "@paperclipai/shared";
 import { logger } from "../middleware/logger.js";
 import { classifyRunLiveness } from "./run-liveness.js";
+import { sqlHeartbeatRunContextMatchesIssueId } from "./heartbeat-run-issue-context-sql.js";
 
 export interface ActivityFilters {
   companyId: string;
@@ -163,7 +164,7 @@ export function activityService(db: Db) {
           isNull(heartbeatRuns.livenessState),
           sql`${heartbeatRuns.status} not in ('queued', 'running')`,
           or(
-            sql`${heartbeatRuns.contextSnapshot} ->> 'issueId' = ${issueId}`,
+            sqlHeartbeatRunContextMatchesIssueId(issueId),
             sql`exists (
               select 1
               from ${activityLog}
@@ -410,7 +411,7 @@ export function activityService(db: Db) {
           and(
             eq(heartbeatRuns.companyId, companyId),
             or(
-              sql`${heartbeatRuns.contextSnapshot} ->> 'issueId' = ${issueId}`,
+              sqlHeartbeatRunContextMatchesIssueId(issueId),
               sql`exists (
                 select 1
                 from ${activityLog}
