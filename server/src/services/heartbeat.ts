@@ -1846,6 +1846,20 @@ export function heartbeatService(db: Db) {
   const budgets = budgetService(db, budgetHooks);
   let unsafeTextProjectionPromise: Promise<boolean> | null = null;
 
+  function issueIdFromRunContext(contextSnapshot: unknown) {
+    const context = parseObject(contextSnapshot);
+    return readNonEmptyString(context.issueId) ?? readNonEmptyString(context.taskId);
+  }
+
+  function issueIdFromWakePayload(payload: unknown) {
+    const parsed = parseObject(payload);
+    const nestedContext = parseObject(parsed[DEFERRED_WAKE_CONTEXT_KEY]);
+    return readNonEmptyString(parsed.issueId) ??
+      readNonEmptyString(parsed.taskId) ??
+      readNonEmptyString(nestedContext.issueId) ??
+      readNonEmptyString(nestedContext.taskId);
+  }
+
   async function hasUnsafeTextProjectionDatabase() {
     if (!unsafeTextProjectionPromise) {
       unsafeTextProjectionPromise = db
@@ -2846,7 +2860,7 @@ export function heartbeatService(db: Db) {
     agent: typeof agents.$inferSelect,
   ) {
     const contextSnapshot = parseObject(run.contextSnapshot);
-    const issueId = readNonEmptyString(contextSnapshot.issueId);
+    const issueId = issueIdFromRunContext(run.contextSnapshot);
     if (!issueId) return null;
     try {
       return await refreshIssueContinuationSummary({
@@ -3002,7 +3016,7 @@ export function heartbeatService(db: Db) {
     agent: typeof agents.$inferSelect,
   ) {
     const contextSnapshot = parseObject(run.contextSnapshot);
-    const issueId = readNonEmptyString(contextSnapshot.issueId);
+    const issueId = issueIdFromRunContext(run.contextSnapshot);
     if (!issueId) {
       if (run.issueCommentStatus !== "not_applicable") {
         await patchRunIssueCommentStatus(run.id, {
@@ -3073,7 +3087,7 @@ export function heartbeatService(db: Db) {
     now: Date,
   ) {
     const contextSnapshot = parseObject(run.contextSnapshot);
-    const issueId = readNonEmptyString(contextSnapshot.issueId);
+    const issueId = issueIdFromRunContext(run.contextSnapshot);
     const taskKey = deriveTaskKeyWithHeartbeatFallback(contextSnapshot, null);
     const sessionBefore = await resolveSessionBeforeForWakeup(agent, taskKey);
     const retryContextSnapshot = {
@@ -3093,7 +3107,7 @@ export function heartbeatService(db: Db) {
           triggerDetail: "system",
           reason: "process_lost_retry",
           payload: {
-            ...(issueId ? { issueId } : {}),
+            ...(issueId ? { issueId, taskId: issueId } : {}),
             retryOfRunId: run.id,
           },
           status: "queued",
@@ -3210,7 +3224,7 @@ export function heartbeatService(db: Db) {
     }
 
     const contextSnapshot = parseObject(run.contextSnapshot);
-    const issueId = readNonEmptyString(contextSnapshot.issueId);
+    const issueId = issueIdFromRunContext(run.contextSnapshot);
     const taskKey = deriveTaskKeyWithHeartbeatFallback(contextSnapshot, null);
     const sessionBefore = await resolveSessionBeforeForWakeup(agent, taskKey);
     const retryContextSnapshot: Record<string, unknown> = {
@@ -3233,7 +3247,7 @@ export function heartbeatService(db: Db) {
           triggerDetail: "system",
           reason: wakeReason,
           payload: {
-            ...(issueId ? { issueId } : {}),
+            ...(issueId ? { issueId, taskId: issueId } : {}),
             retryOfRunId: run.id,
             retryReason,
             scheduledRetryAttempt: schedule.attempt,
@@ -3416,7 +3430,7 @@ export function heartbeatService(db: Db) {
   ) {
     const issueIds = [...new Set(
       queuedRuns
-        .map((run) => readNonEmptyString(parseObject(run.contextSnapshot).issueId))
+        .map((run) => issueIdFromRunContext(run.contextSnapshot))
         .filter((issueId): issueId is string => Boolean(issueId)),
     )];
     if (issueIds.length === 0) {
@@ -3446,8 +3460,9 @@ export function heartbeatService(db: Db) {
     }
 
     const context = parseObject(run.contextSnapshot);
+    const runIssueId = issueIdFromRunContext(run.contextSnapshot);
     const budgetBlock = await budgets.getInvocationBlock(run.companyId, run.agentId, {
-      issueId: readNonEmptyString(context.issueId),
+      issueId: runIssueId,
       projectId: readNonEmptyString(context.projectId),
     });
     if (budgetBlock) {
@@ -3455,12 +3470,11 @@ export function heartbeatService(db: Db) {
       return null;
     }
 
-    const issueId = readNonEmptyString(context.issueId);
-    if (issueId) {
-      const dependencyReadiness = await issuesSvc.listDependencyReadiness(run.companyId, [issueId]);
-      const unresolvedBlockerCount = dependencyReadiness.get(issueId)?.unresolvedBlockerCount ?? 0;
+    if (runIssueId) {
+      const dependencyReadiness = await issuesSvc.listDependencyReadiness(run.companyId, [runIssueId]);
+      const unresolvedBlockerCount = dependencyReadiness.get(runIssueId)?.unresolvedBlockerCount ?? 0;
       if (unresolvedBlockerCount > 0 && !allowsBlockedIssueInteractionWake(context)) {
-        logger.debug({ runId: run.id, issueId, unresolvedBlockerCount }, "claimQueuedRun: skipping blocked run");
+        logger.debug({ runId: run.id, issueId: runIssueId, unresolvedBlockerCount }, "claimQueuedRun: skipping blocked run");
         return null;
       }
     }
@@ -3914,7 +3928,7 @@ export function heartbeatService(db: Db) {
   }
 
   async function hasActiveExecutionPath(companyId: string, issueId: string) {
-    const [run, deferredWake] = await Promise.all([
+    const [run, deferredWake, queuedWakeWithoutRun] = await Promise.all([
       db
         .select({ id: heartbeatRuns.id })
         .from(heartbeatRuns)
@@ -3939,9 +3953,22 @@ export function heartbeatService(db: Db) {
         )
         .limit(1)
         .then((rows) => rows[0] ?? null),
+      db
+        .select({ id: agentWakeupRequests.id })
+        .from(agentWakeupRequests)
+        .where(
+          and(
+            eq(agentWakeupRequests.companyId, companyId),
+            eq(agentWakeupRequests.status, "queued"),
+            sql`${agentWakeupRequests.runId} is null`,
+            sqlAgentWakeupPayloadMatchesIssueId(issueId),
+          ),
+        )
+        .limit(1)
+        .then((rows) => rows[0] ?? null),
     ]);
 
-    return Boolean(run || deferredWake);
+    return Boolean(run || deferredWake || queuedWakeWithoutRun);
   }
 
   async function enqueueStrandedIssueRecovery(input: {
@@ -4300,20 +4327,6 @@ export function heartbeatService(db: Db) {
     result.issueIds.push(...orphanBlockerRecovery.issueIds);
 
     return result;
-  }
-
-  function issueIdFromRunContext(contextSnapshot: unknown) {
-    const context = parseObject(contextSnapshot);
-    return readNonEmptyString(context.issueId) ?? readNonEmptyString(context.taskId);
-  }
-
-  function issueIdFromWakePayload(payload: unknown) {
-    const parsed = parseObject(payload);
-    const nestedContext = parseObject(parsed[DEFERRED_WAKE_CONTEXT_KEY]);
-    return readNonEmptyString(parsed.issueId) ??
-      readNonEmptyString(parsed.taskId) ??
-      readNonEmptyString(nestedContext.issueId) ??
-      readNonEmptyString(nestedContext.taskId);
   }
 
   async function collectIssueGraphLivenessFindings() {
@@ -4737,7 +4750,7 @@ export function heartbeatService(db: Db) {
       const dependencyReadiness = await listQueuedRunDependencyReadiness(agent.companyId, queuedRuns);
       const queuedIssueIds = [...new Set(
         queuedRuns
-          .map((run) => readNonEmptyString(parseObject(run.contextSnapshot).issueId))
+          .map((run) => issueIdFromRunContext(run.contextSnapshot))
           .filter((issueId): issueId is string => Boolean(issueId)),
       )];
       const issueRows = await db
@@ -4754,8 +4767,8 @@ export function heartbeatService(db: Db) {
         );
       const issueById = new Map(issueRows.map((row) => [row.id, row]));
       const prioritizedRuns = [...queuedRuns].sort((left, right) => {
-        const leftIssueId = readNonEmptyString(parseObject(left.contextSnapshot).issueId);
-        const rightIssueId = readNonEmptyString(parseObject(right.contextSnapshot).issueId);
+        const leftIssueId = issueIdFromRunContext(left.contextSnapshot);
+        const rightIssueId = issueIdFromRunContext(right.contextSnapshot);
         const leftReadiness = leftIssueId ? dependencyReadiness.get(leftIssueId) : null;
         const rightReadiness = rightIssueId ? dependencyReadiness.get(rightIssueId) : null;
         const leftReady = leftIssueId ? (leftReadiness?.isDependencyReady ?? true) : true;
@@ -5853,7 +5866,7 @@ export function heartbeatService(db: Db) {
 
   async function releaseIssueExecutionAndPromote(run: typeof heartbeatRuns.$inferSelect) {
     const runContext = parseObject(run.contextSnapshot);
-    const contextIssueId = readNonEmptyString(runContext.issueId);
+    const contextIssueId = issueIdFromRunContext(run.contextSnapshot);
     const taskKey = deriveTaskKeyWithHeartbeatFallback(runContext, null);
     const recoveryAgent = await getAgent(run.agentId);
     const recoveryAgentInvokable =

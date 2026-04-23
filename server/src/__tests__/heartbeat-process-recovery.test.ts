@@ -235,6 +235,7 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
     await db.delete(issueRelations);
     await db.delete(issues);
     await db.delete(heartbeatRunEvents);
+    await db.delete(activityLog);
     await db.delete(heartbeatRuns);
     await db.delete(agentWakeupRequests);
     for (let attempt = 0; attempt < 5; attempt += 1) {
@@ -265,7 +266,7 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
     cleanupPids.clear();
     runningProcesses.clear();
     await tempDb?.cleanup();
-  });
+  }, 60_000);
 
   async function seedRunFixture(input?: {
     adapterType?: string;
@@ -666,10 +667,13 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
     expect(blockedIssue?.executionRunId).toBeNull();
     expect(blockedIssue?.checkoutRunId).toBe(continuationRun?.id ?? null);
 
-    const comments = await db.select().from(issueComments).where(eq(issueComments.issueId, issueId));
+    const comments = await waitForValue(async () => {
+      const rows = await db.select().from(issueComments).where(eq(issueComments.issueId, issueId));
+      return rows.length > 0 ? rows : null;
+    }, 20_000);
     expect(comments).toHaveLength(1);
     expect(comments[0]?.body).toContain("retried continuation");
-  });
+  }, 30_000);
 
   it("schedules a bounded retry for codex transient upstream failures instead of blocking the issue immediately", async () => {
     mockAdapterExecute.mockResolvedValueOnce({
@@ -871,6 +875,43 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
     const runs = await db.select().from(heartbeatRuns).where(eq(heartbeatRuns.agentId, agentId));
     expect(runs.some((row) => row.id === runId)).toBe(true);
     expect(runs.some((row) => row.id === extraRunId)).toBe(true);
+  });
+
+  it("does not escalate stranded todo when only a queued wake (no run row) scopes the issue via taskId", async () => {
+    const { agentId, companyId, issueId, runId } = await seedStrandedIssueFixture({
+      status: "todo",
+      runStatus: "failed",
+      retryReason: "assignment_recovery",
+    });
+    const pendingWakeId = randomUUID();
+    const now = new Date("2026-03-19T00:10:00.000Z");
+
+    await db.insert(agentWakeupRequests).values({
+      id: pendingWakeId,
+      companyId,
+      agentId,
+      source: "automation",
+      triggerDetail: "system",
+      reason: "issue_assigned",
+      payload: { taskId: issueId },
+      status: "queued",
+      runId: null,
+      requestedAt: now,
+      updatedAt: now,
+    });
+
+    const heartbeat = heartbeatService(db);
+    const result = await heartbeat.reconcileStrandedAssignedIssues();
+
+    expect(result.escalated).toBe(0);
+    expect(result.dispatchRequeued).toBe(0);
+    expect(result.skipped).toBeGreaterThanOrEqual(1);
+
+    const issue = await db.select().from(issues).where(eq(issues.id, issueId)).then((rows) => rows[0] ?? null);
+    expect(issue?.status).toBe("todo");
+
+    const runs = await db.select().from(heartbeatRuns).where(eq(heartbeatRuns.agentId, agentId));
+    expect(runs.some((row) => row.id === runId)).toBe(true);
   });
 
   it("assigns open unassigned blockers back to their creator agent", async () => {

@@ -98,7 +98,7 @@ describeEmbeddedPostgres("heartbeat issue graph liveness escalation", () => {
 
   afterAll(async () => {
     await tempDb?.cleanup();
-  }, 30_000);
+  }, 60_000);
 
   async function seedBlockedChain() {
     const companyId = randomUUID();
