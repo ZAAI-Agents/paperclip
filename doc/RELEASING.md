@@ -219,6 +219,23 @@ Instead:
 3. wait for the next automatic canary
 4. rerun smoke testing
 
+### If stable publish fails with `npm ERR! ENEEDAUTH`
+
+This means npm publish auth is not available in the GitHub Actions runner.
+
+Fix it with **one** of these approaches:
+
+1. **npm Trusted Publishing (OIDC)** (recommended)
+   - Configure `@paperclipai` on npmjs to trust GitHub Actions for this repository + workflow.
+   - Ensure the job has `permissions: id-token: write` (it does in `publish_stable`).
+   - Ensure the publish command is run with provenance enabled (the release workflow sets `NPM_CONFIG_PROVENANCE=true`, and the release script adds `--provenance` under `GITHUB_ACTIONS=true`).
+
+2. **NPM token fallback**
+   - Add a valid npm automation token as `NPM_TOKEN` to the GitHub Actions environment `npm-stable`.
+   - The release workflow will configure npm auth from that secret automatically.
+
+After fixing auth, re-run the `Release` workflow and confirm package publish completes before attempting to deploy.
+
 ### If stable npm publish succeeds but tag push or GitHub release creation fails
 
 This is a partial release. npm is already live.
