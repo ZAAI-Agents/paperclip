@@ -2420,6 +2420,7 @@ export function issueService(db: Db) {
 
       const conditions = [eq(issueComments.issueId, issueId)];
       if (afterCommentId) {
+        if (!isUuidLike(afterCommentId)) return [];
         const anchor = await db
           .select({
             id: issueComments.id,
@@ -2430,6 +2431,7 @@ export function issueService(db: Db) {
           .then((rows) => rows[0] ?? null);
 
         if (!anchor) return [];
+        if (anchor.createdAt == null) return [];
         // Anchor values must be plain strings for postgres.js binds (Date objects throw ERR_INVALID_ARG_TYPE).
         const anchorCreatedAt = issueCommentCursorCreatedAtParam(anchor.createdAt);
         const anchorId = String(anchor.id);

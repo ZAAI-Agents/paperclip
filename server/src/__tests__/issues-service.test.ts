@@ -1957,6 +1957,35 @@ describeEmbeddedPostgres("issueService.listComments cursoring", () => {
     expect(await svc.listComments(issueId, { afterCommentId: foreignCommentId, order: "asc" })).toEqual([]);
   });
 
+  it("returns an empty list when after cursor is not a UUID", async () => {
+    const companyId = randomUUID();
+    const issueId = randomUUID();
+
+    await db.insert(companies).values({
+      id: companyId,
+      name: "Paperclip",
+      issuePrefix: `T${companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`,
+      requireBoardApprovalForNewAgents: false,
+    });
+
+    await db.insert(issues).values({
+      id: issueId,
+      companyId,
+      title: "Threaded issue",
+      description: null,
+      status: "todo",
+      priority: "medium",
+    });
+
+    await db.insert(issueComments).values({
+      companyId,
+      issueId,
+      body: "First",
+    });
+
+    expect(await svc.listComments(issueId, { afterCommentId: "not-a-uuid", order: "asc" })).toEqual([]);
+  });
+
   it("pages forward in ascending order after a real anchor comment", async () => {
     const companyId = randomUUID();
     const issueId = randomUUID();

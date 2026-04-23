@@ -25,6 +25,7 @@ import {
   updateIssueSchema,
   getClosedIsolatedExecutionWorkspaceMessage,
   isClosedIsolatedExecutionWorkspace,
+  isUuidLike,
   type ExecutionWorkspace,
 } from "@paperclipai/shared";
 import { trackAgentTaskCompleted } from "@paperclipai/shared/telemetry";
@@ -2420,6 +2421,10 @@ export function issueRoutes(
         : typeof req.query.afterCommentId === "string" && req.query.afterCommentId.trim().length > 0
           ? req.query.afterCommentId.trim()
           : null;
+    if (afterCommentId && !isUuidLike(afterCommentId)) {
+      res.status(400).json({ error: "Invalid `after` comment cursor: expected a comment id UUID" });
+      return;
+    }
     const order =
       typeof req.query.order === "string" && req.query.order.trim().toLowerCase() === "asc"
         ? "asc"
