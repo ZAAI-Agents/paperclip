@@ -1,5 +1,5 @@
 import { Buffer } from "node:buffer";
-import { and, asc, desc, eq, inArray, isNull, ne, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, inArray, isNull, lt, ne, or, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import {
   activityLog,
@@ -2432,19 +2432,22 @@ export function issueService(db: Db) {
 
         if (!anchor) return [];
         if (anchor.createdAt == null) return [];
-        // Anchor values must be plain strings for postgres.js binds (Date objects throw ERR_INVALID_ARG_TYPE).
-        const anchorCreatedAt = issueCommentCursorCreatedAtParam(anchor.createdAt);
+        // Normalize to ISO text first (anchor row may be Date or string), then parse once so Drizzle's
+        // timestamp mappers receive real Date instances. Avoid raw sql`…${col}…${param}` here: that path
+        // has shipped Date binds that postgres.js rejects (ERR_INVALID_ARG_TYPE on Buffer.byteLength).
+        const anchorCreatedAtIso = issueCommentCursorCreatedAtParam(anchor.createdAt);
+        const anchorCreatedAt = new Date(anchorCreatedAtIso);
         const anchorId = String(anchor.id);
         conditions.push(
           order === "asc"
-            ? sql<boolean>`(
-                ${issueComments.createdAt} > ${anchorCreatedAt}
-                OR (${issueComments.createdAt} = ${anchorCreatedAt} AND ${issueComments.id} > ${anchorId})
-              )`
-            : sql<boolean>`(
-                ${issueComments.createdAt} < ${anchorCreatedAt}
-                OR (${issueComments.createdAt} = ${anchorCreatedAt} AND ${issueComments.id} < ${anchorId})
-              )`,
+            ? or(
+                gt(issueComments.createdAt, anchorCreatedAt),
+                and(eq(issueComments.createdAt, anchorCreatedAt), gt(issueComments.id, anchorId)),
+              )
+            : or(
+                lt(issueComments.createdAt, anchorCreatedAt),
+                and(eq(issueComments.createdAt, anchorCreatedAt), lt(issueComments.id, anchorId)),
+              ),
         );
       }
 
